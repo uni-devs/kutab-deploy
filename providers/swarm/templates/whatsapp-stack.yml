@@ -1,0 +1,85 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared WhatsApp gateway (wwebjs-api) for ALL tenants.
+# Multi-session: each tenant is one sessionId. INTERNAL ONLY — no Traefik route;
+# tenant backends reach it at http://wwebjs-api:3000 over the kutab-shared
+# overlay. Stateful singleton (sessions on a local volume) → replicas: 1,
+# stop-first updates. Chromium-heavy: size for the number of linked sessions and
+# give /dev/shm headroom (Chromium crashes on the default 64M).
+#
+# The API key is injected from a Swarm secret at start-up (the upstream image
+# reads process.env.API_KEY).
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-whatsapp-resources: &whatsapp-resources
+  limits:
+    cpus: "${WHATSAPP_CPU_LIMIT:-2.0}"
+    memory: ${WHATSAPP_MEM_LIMIT:-4096M}
+  reservations:
+    cpus: "${WHATSAPP_CPU_RES:-0.50}"
+    memory: ${WHATSAPP_MEM_RES:-1024M}
+
+services:
+  wwebjs-api:
+    image: ${WHATSAPP_IMAGE:-avoylenko/wwebjs-api:latest}
+    entrypoint: ["/bin/sh", "-c"]
+    command: 'if [ -f /run/secrets/wwebjs_api_key ]; then export API_KEY="$$(cat /run/secrets/wwebjs_api_key)"; fi; exec node server.js'
+    environment:
+      ENABLE_LOCAL_CALLBACK_EXAMPLE: "FALSE"
+      ENABLE_SWAGGER_ENDPOINT: "FALSE"
+      ENABLE_WEBHOOK: "TRUE"
+      RECOVER_SESSIONS: "TRUE"
+      AUTO_START_SESSIONS: "TRUE"
+      SET_MESSAGES_AS_SEEN: "TRUE"
+      HEADLESS: "TRUE"
+    env_file:
+      - ${PROVIDER_ROOT}/envs/infrastructure/whatsapp.env
+    networks:
+      kutab-shared:
+        aliases:
+          - wwebjs-api
+    volumes:
+      - type: tmpfs
+        target: /dev/shm
+        tmpfs:
+          size: 536870912
+      - wwebjs-sessions:/usr/src/app/sessions
+    secrets:
+      - wwebjs_api_key
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      replicas: 1
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+      placement:
+        constraints:
+          - node.labels.kutab.whatsapp == true
+          - node.labels.kutab.whatsapp_pool == ${WHATSAPP_POOL:-shared}
+      resources: *whatsapp-resources
+      labels:
+        - "kutab.service=wwebjs-api"
+
+networks:
+  kutab-shared:
+    external: true
+
+volumes:
+  wwebjs-sessions:
+
+secrets:
+  wwebjs_api_key:
+    external: true
+    name: wwebjs_api_key

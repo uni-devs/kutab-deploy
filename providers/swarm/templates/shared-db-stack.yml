@@ -1,0 +1,70 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared database instance — ONE MySQL server for ALL tenants.
+# Each tenant gets its own database + user (provisioned by provision-tenant-db.sh)
+# inside this single instance. Pinned to the DB-pool node, on local NVMe.
+#
+# IMPORTANT: this is a stateful singleton.
+#   * replicas is always 1 (never scale a single-volume MySQL — data corruption).
+#   * update_config.order = stop-first so an upgrade never runs two mysqld on the
+#     same volume at once.
+# Reachable from every tenant backend over the kutab-shared overlay as "kutab-db".
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-shared-db-resources: &shared-db-resources
+  limits:
+    cpus: "${SHARED_DB_CPU_LIMIT:-2.0}"
+    memory: ${SHARED_DB_MEM_LIMIT:-4096M}
+  reservations:
+    cpus: "${SHARED_DB_CPU_RES:-0.50}"
+    memory: ${SHARED_DB_MEM_RES:-1024M}
+
+services:
+  db:
+    image: ${SHARED_DB_IMAGE:-mysql:8.4.8}
+    command:
+      - --mysql-native-password=ON
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/shared_db_root_password
+    networks:
+      kutab-shared:
+        aliases:
+          - kutab-db
+    volumes:
+      - shared-db-data:/var/lib/mysql
+      - ${CONFIG_ROOT}/mysql/shared-db.cnf:/etc/mysql/conf.d/shared-db.cnf:ro
+    secrets:
+      - shared_db_root_password
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$(cat /run/secrets/shared_db_root_password)\" --silent"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    deploy:
+      replicas: 1
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+      placement:
+        constraints:
+          - node.labels.kutab.db == true
+          - node.labels.kutab.db_pool == ${DB_POOL:-shared}
+      resources: *shared-db-resources
+      labels:
+        - "kutab.service=shared-db"
+
+networks:
+  kutab-shared:
+    external: true
+
+volumes:
+  shared-db-data:
+
+secrets:
+  shared_db_root_password:
+    external: true
+    name: shared_db_root_password

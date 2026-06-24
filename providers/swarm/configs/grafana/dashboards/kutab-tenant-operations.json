@@ -1,0 +1,24 @@
+{
+  "uid": "kutab-tenant-operations",
+  "title": "Kutab Tenant Operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["kutab", "tenant"],
+  "time": {"from": "now-7d", "to": "now"},
+  "templating": {
+    "list": [
+      {"name": "tenant", "type": "query", "datasource": "Prometheus", "query": "label_values(kutab_app_info, tenant)", "refresh": 1}
+    ]
+  },
+  "panels": [
+    {"type": "stat", "title": "Users", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum(kutab_users_total{tenant=\"$tenant\"})"}]},
+    {"type": "stat", "title": "Active Subscriptions", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum(kutab_subscriptions_total{tenant=\"$tenant\",status=\"active\"})"}]},
+    {"type": "stat", "title": "Open Tickets", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum(kutab_support_tickets_total{tenant=\"$tenant\",status=~\"open|pending\"})"}]},
+    {"type": "stat", "title": "Active Sessions", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "sum(kutab_active_sessions_total{tenant=\"$tenant\"})"}]},
+    {"type": "barchart", "title": "Lecture Peak Hours UTC", "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8}, "targets": [{"expr": "sum by (hour) (kutab_lecture_peak_hour_total{tenant=\"$tenant\"})"}]},
+    {"type": "timeseries", "title": "Lecture States", "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8}, "targets": [{"expr": "sum by (state) (kutab_lectures_total{tenant=\"$tenant\"})"}]},
+    {"type": "timeseries", "title": "Queue Backlog", "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}, "targets": [{"expr": "sum by (queue) (kutab_queue_jobs_total{tenant=\"$tenant\"})"}]},
+    {"type": "timeseries", "title": "Invoice Amount by Status", "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8}, "targets": [{"expr": "sum by (status, currency) (kutab_invoice_amount_total{tenant=\"$tenant\"})"}]}
+  ]
+}

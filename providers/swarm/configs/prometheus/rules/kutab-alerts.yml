@@ -1,0 +1,75 @@
+groups:
+  - name: kutab-platform
+    rules:
+      - alert: KutabTenantTargetDown
+        expr: up{job="kutab-tenants"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tenant metrics target is down"
+          description: "Tenant {{ $labels.tenant }} on {{ $labels.node }} has not responded to Prometheus for 2 minutes."
+      - alert: KutabHighFailedJobs
+        expr: kutab_failed_jobs_last_hour_total > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High failed job count"
+          description: "Tenant {{ $labels.tenant }} has more than 5 failed jobs in the last hour."
+      - alert: KutabQueueBacklog
+        expr: sum by (tenant, queue) (kutab_queue_jobs_total) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue backlog is growing"
+          description: "Tenant {{ $labels.tenant }} queue {{ $labels.queue }} has more than 100 pending jobs."
+      - alert: KutabHighContainerCpu
+        expr: sum by (container_label_com_docker_swarm_service_name) (rate(container_cpu_usage_seconds_total[5m])) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High container CPU usage"
+          description: "Service {{ $labels.container_label_com_docker_swarm_service_name }} is using high CPU."
+      - alert: KutabNodeDiskFilling
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) < 0.15
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node disk has less than 15% free space"
+          description: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} is running low."
+      - alert: KutabTrafficSpike
+        expr: sum(rate(traefik_service_requests_total[5m])) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Traffic spike detected"
+          description: "Traefik request rate is above the current baseline threshold."
+      - alert: KutabHighHttpErrors
+        expr: sum(rate(traefik_service_requests_total{code=~"5.."}[5m])) > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP 5xx errors detected"
+          description: "Traefik is seeing sustained 5xx responses."
+      - alert: KutabBackendExceptions
+        expr: sum by (tenant) (increase(kutab_exceptions_total[15m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backend exceptions are firing"
+          description: "Tenant {{ $labels.tenant }} reported more than 10 backend exceptions in the last 15 minutes. Check Loki (tenant container, level ERROR) or storage/logs/exceptions.log on the node."
+      - alert: KutabBackendExceptionSpike
+        expr: sum by (tenant) (increase(kutab_exceptions_total[5m])) > 50
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend exception spike"
+          description: "Tenant {{ $labels.tenant }} reported more than 50 backend exceptions in 5 minutes - likely an outage or a bad release."

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Kutab deployment console — provider-aware. Interactive TUI (no args, needs gum)
+# or scriptable subcommands. General actions live at the root; provider-specific
+# actions live under each providers/<name>/.
+set -euo pipefail
+
+KUTAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GEN="$KUTAB_ROOT/scripts"
+# shellcheck source=../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"
+# shellcheck source=../lib/tui.sh
+source "$KUTAB_ROOT/lib/tui.sh"
+# shellcheck source=../lib/providers.sh
+source "$KUTAB_ROOT/lib/providers.sh"
+
+cluster_banner() {
+  if swarm_active; then printf 'Swarm: active (%s) · %s' "$(is_manager && echo manager || echo worker)" "$(hostname)"
+  else printf 'Swarm: inactive · %s' "$(hostname)"; fi
+}
+
+gen_status() {
+  ui_title 'Status'
+  if swarm_active; then docker node ls 2>/dev/null; printf '\n'; docker stack ls 2>/dev/null; else ui_note 'Swarm inactive.'; fi
+  printf '\n'; ui_note "Providers available: $(list_providers | tr '\n' ' ')"
+}
+
+# ── interactive ─────────────────────────────────────────────────────────────────
+provider_menu_loop() {
+  load_provider "$1"
+  while true; do
+    clear 2>/dev/null || true
+    ui_banner "$PROVIDER_NAME · $PROVIDER_DESC"
+    local acts choice; mapfile -t acts < <(provider_actions)
+    choice="$(ui_menu "$PROVIDER_NAME — choose an action" "${acts[@]}" '← Back')" || break
+    [[ -z "$choice" || "$choice" == '← Back' ]] && break
+    printf '\n'; provider_flow "$choice"
+    printf '\n'; ui_confirm 'Continue in this provider?' || break
+  done
+}
+
+tui_loop() {
+  command -v gum >/dev/null 2>&1 || ensure_gum || {
+    printf '\nThe interactive console needs gum. Install it (see below) or use the non-interactive commands.\n\n' >&2
+    usage; exit 0; }
+  while true; do
+    clear 2>/dev/null || true
+    ui_banner "$(cluster_banner)"
+    local items=('Bootstrap this VM' 'Prerequisite check' 'Sync config to GitHub' 'Status') p choice
+    for p in $(list_providers); do items+=("Provider: $p"); done
+    items+=('Quit')
+    choice="$(ui_menu 'Choose an action' "${items[@]}")" || break
+    printf '\n'
+    case "$choice" in
+      'Bootstrap this VM')      bash "$GEN/bootstrap-vm.sh" ;;
+      'Prerequisite check')     bash "$GEN/preflight.sh" ;;
+      'Sync config to GitHub')  local r; r="$(ui_input 'GitHub remote URL (blank = existing origin)')"; bash "$GEN/sync-config.sh" ${r:+--remote "$r"} ;;
+      'Status')                 gen_status ;;
+      'Provider: '*)            provider_menu_loop "${choice#Provider: }"; continue ;;
+      'Quit'|'')                break ;;
+    esac
+    printf '\n'; ui_confirm 'Back to main menu?' || break
+  done
+  ui_note 'Bye.'
+}
+
+usage() {
+  cat <<USAGE
+Kutab deployment console (provider-aware)
+
+  kutab-deploy                    interactive console (requires gum)
+  kutab-deploy <command> ...      run non-interactively
+
+General:
+  bootstrap-vm                    packages, Docker, security baseline (any provider)
+  preflight                       prerequisite check
+  sync-config                     SOPS/age-encrypted config+secrets snapshot to GitHub
+
+Providers ($(list_providers | tr '\n' ' ')):
+  kutab-deploy <provider> <action> [args]      e.g. kutab-deploy swarm deploy-tenant acme ...
+                                               e.g. kutab-deploy compose deploy acme ...
+  Each provider's actions are the scripts in providers/<provider>/scripts/.
+
+Back-compat aliases:
+  bootstrap-swarm | join-swarm | infra | setup-db | deploy-tenant | whatsapp | update | single
+USAGE
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────────────
+cmd="${1:-tui}"; [[ $# -gt 0 ]] && shift
+case "$cmd" in
+  tui|menu)                 tui_loop ;;
+  bootstrap-vm)             exec bash "$GEN/bootstrap-vm.sh" "$@" ;;
+  preflight)                exec bash "$GEN/preflight.sh" "$@" ;;
+  sync-config)              exec bash "$GEN/sync-config.sh" "$@" ;;
+  swarm|compose)            run_provider_script "$cmd" "$@" ;;
+  # back-compat aliases → provider scripts
+  bootstrap-swarm)          run_provider_script swarm bootstrap-cluster "$@" ;;
+  join-swarm)               run_provider_script swarm join-swarm "$@" ;;
+  deploy-swarm-infra|infra) run_provider_script swarm deploy-infra "$@" ;;
+  setup-db)                 run_provider_script swarm setup-db "$@" ;;
+  deploy-swarm-tenant|deploy-tenant) run_provider_script swarm deploy-tenant "$@" ;;
+  deploy-whatsapp|whatsapp) run_provider_script swarm deploy-whatsapp "$@" ;;
+  update)                   run_provider_script swarm update-deployment "$@" ;;
+  single)                   run_provider_script compose deploy "$@" ;;
+  help|-h|--help)           usage ;;
+  *) printf 'Unknown command: %s\n\n' "$cmd" >&2; usage >&2; exit 64 ;;
+esac

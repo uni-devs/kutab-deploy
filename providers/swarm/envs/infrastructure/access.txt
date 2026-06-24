@@ -1,0 +1,15 @@
+Traefik Dashboard: https://traefik.kutab.localhost
+Traefik User: admin
+Traefik Password: KcrAvFJoaUXrWuVRvbXF0c0xnpSKmXGH
+
+Prometheus: https://prometheus.kutab.localhost
+Prometheus User: monitor
+Prometheus Password: YE0jgkA02xjMiFq8jXbOoUKeVEnbyTOf
+
+Grafana: https://grafana.kutab.localhost
+Grafana User: admin
+Grafana Password: QIpFSzqQYx51woykKFcu4AnXvlobo0ES
+
+Portainer: https://portainer.kutab.localhost
+Portainer User: admin
+Portainer Password: 2jKr6SDucFGtEyeFKH7hf6HvqQrfllBE

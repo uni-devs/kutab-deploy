@@ -1,0 +1,275 @@
+version: "3.9"
+
+# ─── Resource profiles ───────────────────────────────────────────────────────
+# Per-service CPU/memory limits + reservations.
+#   * limits       cap a tenant so one container can never starve its node
+#                  (noisy-neighbour protection).
+#   * reservations let the Swarm scheduler bin-pack safely across nodes.
+# Every value is overridable via environment so it can be tuned per plan/tenant
+# without editing this template (defaults are sized for a small single node).
+x-app-resources: &app-resources
+  limits:
+    cpus: "${KUTAB_APP_CPU_LIMIT:-1.0}"
+    memory: ${KUTAB_APP_MEM_LIMIT:-768M}
+  reservations:
+    cpus: "${KUTAB_APP_CPU_RES:-0.10}"
+    memory: ${KUTAB_APP_MEM_RES:-192M}
+
+x-proxy-resources: &proxy-resources
+  limits:
+    cpus: "${KUTAB_PROXY_CPU_LIMIT:-0.50}"
+    memory: ${KUTAB_PROXY_MEM_LIMIT:-128M}
+  reservations:
+    cpus: "${KUTAB_PROXY_CPU_RES:-0.05}"
+    memory: ${KUTAB_PROXY_MEM_RES:-32M}
+
+x-worker-resources: &worker-resources
+  limits:
+    cpus: "${KUTAB_WORKER_CPU_LIMIT:-0.75}"
+    memory: ${KUTAB_WORKER_MEM_LIMIT:-512M}
+  reservations:
+    cpus: "${KUTAB_WORKER_CPU_RES:-0.05}"
+    memory: ${KUTAB_WORKER_MEM_RES:-128M}
+
+x-db-resources: &db-resources
+  limits:
+    cpus: "${KUTAB_DB_CPU_LIMIT:-1.0}"
+    memory: ${KUTAB_DB_MEM_LIMIT:-1024M}
+  reservations:
+    cpus: "${KUTAB_DB_CPU_RES:-0.25}"
+    memory: ${KUTAB_DB_MEM_RES:-512M}
+
+x-cache-resources: &cache-resources
+  limits:
+    cpus: "${KUTAB_CACHE_CPU_LIMIT:-0.50}"
+    memory: ${KUTAB_CACHE_MEM_LIMIT:-256M}
+  reservations:
+    cpus: "${KUTAB_CACHE_CPU_RES:-0.05}"
+    memory: ${KUTAB_CACHE_MEM_RES:-64M}
+
+# Shared placement for the app-tier services (php-fpm / nginx / frontend /
+# workers / scheduler / reverb). Pinned to app-pool nodes. Restart policy is
+# left at the Swarm default ("any") on purpose: the queue workers run with
+# `--max-time` and exit 0 to recycle, so they must be restarted on clean exit.
+x-app-placement: &app-placement
+  placement:
+    constraints:
+      - node.labels.kutab.app == true
+      - node.labels.kutab.app_pool == ${APP_POOL}
+
+x-backend-base: &backend-base
+  image: ${BACKEND_IMAGE}
+  env_file:
+    - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/backend.env
+  networks:
+    - tenant-internal
+    - kutab-shared
+
+services:
+  mysql:
+    image: mysql:8.4.8
+    env_file:
+      - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/backend.env
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --mysql-native-password=ON
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    networks:
+      - tenant-internal
+    volumes:
+      - mysql-data:/var/lib/mysql
+    secrets:
+      - mysql_password
+      - mysql_root_password
+    deploy:
+      placement:
+        constraints:
+          - node.labels.kutab.db == true
+          - node.labels.kutab.db_pool == ${DB_POOL}
+      resources: *db-resources
+
+  valkey:
+    image: valkey/valkey:7.2.12-alpine
+    env_file:
+      - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/backend.env
+    command:
+      - /bin/sh
+      - -lc
+      - exec valkey-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    networks:
+      - tenant-internal
+    volumes:
+      - valkey-data:/data
+    deploy:
+      placement:
+        constraints:
+          - node.labels.kutab.cache == true
+          - node.labels.kutab.cache_pool == ${CACHE_POOL}
+      resources: *cache-resources
+
+  backend:
+    <<: *backend-base
+    networks:
+      tenant-internal:
+        aliases:
+          - app
+      kutab-shared: {}
+    environment:
+      CONTAINER_MODE: fpm
+      RUNNING_MIGRATIONS_AND_SEEDERS: "false"
+    volumes:
+      - backend-storage:/var/www/html/storage/app/public
+      - backend-logs:/var/www/html/storage/logs
+    healthcheck:
+      test: ["CMD", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      <<: *app-placement
+      replicas: ${BACKEND_REPLICAS}
+      resources: *app-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=backend"
+
+  nginx:
+    image: ${NGINX_IMAGE}
+    env_file:
+      - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/backend.env
+    networks:
+      - tenant-internal
+      - kutab-shared
+    volumes:
+      - backend-storage:/var/www/html/storage/app/public:ro
+    deploy:
+      <<: *app-placement
+      replicas: ${NGINX_REPLICAS}
+      resources: *proxy-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=nginx"
+        - "prometheus.scrape=true"
+        - "prometheus.path=/metrics"
+        - "prometheus.port=8080"
+        - "traefik.enable=true"
+        - "traefik.http.routers.${TENANT_NAME}-api.rule=${API_HOST_RULE}"
+        - "traefik.http.routers.${TENANT_NAME}-api.entrypoints=websecure"
+        - "traefik.http.routers.${TENANT_NAME}-api.tls=true"
+        - "traefik.http.routers.${TENANT_NAME}-api.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.${TENANT_NAME}-api.middlewares=security-headers@file"
+        - "traefik.http.services.${TENANT_NAME}-api.loadbalancer.server.port=8080"
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    env_file:
+      - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/frontend.env
+    networks:
+      - tenant-internal
+      - kutab-shared
+    deploy:
+      <<: *app-placement
+      replicas: ${FRONTEND_REPLICAS}
+      resources: *app-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=frontend"
+        - "traefik.enable=true"
+        - "traefik.http.routers.${TENANT_NAME}-frontend.rule=${FRONTEND_HOST_RULE}"
+        - "traefik.http.routers.${TENANT_NAME}-frontend.entrypoints=websecure"
+        - "traefik.http.routers.${TENANT_NAME}-frontend.tls=true"
+        - "traefik.http.routers.${TENANT_NAME}-frontend.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.${TENANT_NAME}-frontend.middlewares=security-headers@file"
+        - "traefik.http.services.${TENANT_NAME}-frontend.loadbalancer.server.port=3000"
+
+  worker:
+    <<: *backend-base
+    environment:
+      CONTAINER_MODE: worker
+      WORKER_COMMAND: php artisan queue:work --queue=default --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - backend-storage:/var/www/html/storage/app/public
+      - backend-logs:/var/www/html/storage/logs
+    deploy:
+      <<: *app-placement
+      replicas: ${WORKER_REPLICAS}
+      resources: *worker-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=worker"
+
+  worker-notifications:
+    <<: *backend-base
+    environment:
+      CONTAINER_MODE: worker
+      WORKER_COMMAND: php artisan queue:work --queue=notifications --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - backend-storage:/var/www/html/storage/app/public
+      - backend-logs:/var/www/html/storage/logs
+    deploy:
+      <<: *app-placement
+      replicas: ${NOTIFICATION_WORKER_REPLICAS}
+      resources: *worker-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=worker-notifications"
+
+  scheduler:
+    <<: *backend-base
+    environment:
+      CONTAINER_MODE: scheduler
+    volumes:
+      - backend-storage:/var/www/html/storage/app/public
+      - backend-logs:/var/www/html/storage/logs
+    deploy:
+      <<: *app-placement
+      replicas: 1
+      resources: *worker-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=scheduler"
+
+  reverb:
+    <<: *backend-base
+    environment:
+      CONTAINER_MODE: reverb
+    deploy:
+      <<: *app-placement
+      replicas: ${REVERB_REPLICAS}
+      resources: *worker-resources
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=reverb"
+        - "traefik.enable=true"
+        - "traefik.http.routers.${TENANT_NAME}-ws.rule=${WS_HOST_RULE}"
+        - "traefik.http.routers.${TENANT_NAME}-ws.entrypoints=websecure"
+        - "traefik.http.routers.${TENANT_NAME}-ws.tls=true"
+        - "traefik.http.routers.${TENANT_NAME}-ws.tls.certresolver=letsencrypt"
+        - "traefik.http.services.${TENANT_NAME}-ws.loadbalancer.server.port=6001"
+
+networks:
+  tenant-internal:
+    driver: overlay
+    attachable: true
+  kutab-shared:
+    external: true
+
+volumes:
+  mysql-data:
+  valkey-data:
+  backend-storage:
+  backend-logs:
+
+secrets:
+  mysql_password:
+    external: true
+    name: ${TENANT_NAME}_mysql_password
+  mysql_root_password:
+    external: true
+    name: ${TENANT_NAME}_mysql_root_password
