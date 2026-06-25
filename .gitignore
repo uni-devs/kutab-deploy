@@ -1,2 +1,7 @@
-# node-local state (per node, never synced)
+# Per-node data: plaintext secrets, generated env files + node state. Lives here
+# at the repo root but is NEVER tracked — sync-config commits only the encrypted
+# state/*.sops copies. Override the location with KUTAB_DATA_DIR.
+.kutab-data/
+
+# legacy node-state file (now under .kutab-data/node.env)
 .kutab-node.env

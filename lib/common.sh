@@ -90,15 +90,50 @@ public_ip() {
 }
 
 # ── data dir (per-node secrets, generated env files + node state) ───────────────
-# Lives OUTSIDE the code tree so live creds never sit next to the scripts and a
-# `git clean`/redeploy can't wipe them. Default /var/lib/kutab when writable
-# (root nodes), else ~/.local/share/kutab. Override with KUTAB_DATA_DIR.
+# One git-ignored folder ('.kutab-data') at the repo root: live creds sit in a
+# single place beside the deployment (not interleaved with the scripts) and are
+# never committed (sync-config commits only the encrypted state/*.sops). Override
+# with KUTAB_DATA_DIR=/var/lib/kutab to keep it off the repo entirely.
 kutab_data_dir() {
   if [[ -n "${KUTAB_DATA_DIR:-}" ]]; then printf '%s' "$KUTAB_DATA_DIR"; return; fi
-  if [[ "$(id -u)" -eq 0 || -w /var/lib ]]; then printf '/var/lib/kutab'; else printf '%s/.local/share/kutab' "$HOME"; fi
+  printf '%s/.kutab-data' "${KUTAB_ROOT:-$PWD}"
 }
-# secrets/env base for one provider, e.g. /var/lib/kutab/providers/swarm
+# secrets/env base for one provider, e.g. <repo>/.kutab-data/providers/swarm
 provider_state_root() { printf '%s/providers/%s' "$(kutab_data_dir)" "${1:?provider}"; }
+
+# write_traefik_env <dir> <acme-email> <tls-mode> [cf-dns-token]
+# Generates <dir>/traefik.env for the compose Traefik service (loaded via env_file).
+# Modes: le (LE HTTP-01) · cloudflare (self-signed origin, set Cloudflare = "Full") ·
+# le-dns-cloudflare (LE DNS-01, needs a Cloudflare token). Used by deploy.sh + set-tls.sh.
+write_traefik_env() {
+  local dir="$1" email="$2" mode="$3" token="${4:-}"
+  case "$mode" in le|cloudflare|le-dns-cloudflare) ;; *) fail "Unknown TLS mode '$mode' (use le|cloudflare|le-dns-cloudflare)";; esac
+  if [[ "$mode" == le-dns-cloudflare ]]; then
+    [[ -n "$token" || ! -f "$dir/.cf_dns_token" ]] || token="$(cat "$dir/.cf_dns_token")"
+    [[ -n "$token" ]] || fail "le-dns-cloudflare needs a Cloudflare API token (Zone:DNS:Edit + Zone:Read)."
+  fi
+  {
+    if [[ "$mode" == cloudflare ]]; then
+      echo "# Cloudflare Full mode: origin serves Traefik's default self-signed cert."
+      echo "# Cloudflare presents the real public cert at its edge — no ACME, no token."
+    else
+      echo "TRAEFIK_ENTRYPOINTS_WEBSECURE_HTTP_TLS_CERTRESOLVER=le"
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL=$email"
+      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_STORAGE=/acme/acme.json"
+      if [[ "$mode" == le-dns-cloudflare ]]; then
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_DNSCHALLENGE=true"
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_DNSCHALLENGE_PROVIDER=cloudflare"
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_DNSCHALLENGE_RESOLVERS=1.1.1.1:53,1.0.0.1:53"
+        echo "CF_DNS_API_TOKEN=$token"
+      else
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_HTTPCHALLENGE=true"
+        echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_HTTPCHALLENGE_ENTRYPOINT=web"
+      fi
+    fi
+  } > "$dir/traefik.env"
+  chmod 600 "$dir/traefik.env"
+  [[ "$mode" == le-dns-cloudflare ]] && { ( umask 077; printf '%s' "$token" > "$dir/.cf_dns_token" ); chmod 600 "$dir/.cf_dns_token"; }
+}
 
 # ── node state (per-node, NOT synced) ──────────────────────────────────────────
 # A simple KEY=VALUE record of what this node is / holds, so the console can

@@ -11,6 +11,7 @@ Deploy (one box)
 Scale services
 Update deployment
 Set custom domain
+Set TLS / cert mode
 WhatsApp gateway
 Host database (optional)
 Status
@@ -62,6 +63,17 @@ provider_flow() {
       d="$(ui_input 'Custom domain to add (leave blank to remove the current one)')"
       if [[ -n "$d" ]]; then bash "$S/set-domain.sh" "$name" --custom-domain "$d"; show_dns "$d" "" "$(public_ip)"
       else bash "$S/set-domain.sh" "$name" --remove; fi
+      ;;
+    'Set TLS / cert mode')
+      local name m tok=(); name="$(_compose_pick)" || return
+      m="$(ui_menu 'Certificate mode' 'cloudflare — behind Cloudflare proxy (self-signed origin)' 'le — direct domain, Lets Encrypt HTTP-01' 'le-dns-cloudflare — LE DNS-01 (needs token)')" || return
+      case "$m" in
+        cloudflare*) m=cloudflare ;;
+        le-dns*) m=le-dns-cloudflare; tok=(--cf-dns-token "$(ui_input 'Cloudflare API token (Zone:DNS:Edit + Zone:Read)')") ;;
+        le*) m=le ;;
+        *) return ;;
+      esac
+      bash "$S/set-tls.sh" "$name" --tls-mode "$m" "${tok[@]}"
       ;;
     'WhatsApp gateway')
       local name; name="$(_compose_pick)" || return

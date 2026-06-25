@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Snapshot deployment config + secrets to a Git/GitHub remote, with secrets
 # encrypted via SOPS + age. Plaintext secrets/envs live OFF the repo (the data
-# dir, default /var/lib/kutab); only their encrypted *.sops copies are committed,
+# dir, default .kutab-data at the repo root); only their encrypted *.sops copies are committed,
 # under state/<provider>/. Use --restore to decrypt them back onto a new node.
 #
 #   sync-config.sh [--remote <git-url>] [--message <msg>] [--no-push]

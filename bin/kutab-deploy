@@ -50,7 +50,7 @@ tui_loop() {
   while true; do
     clear 2>/dev/null || true
     ui_banner "$(cluster_banner)"
-    local items=('Bootstrap this VM' 'Prerequisite check' 'Sync config to GitHub' 'Status') p choice
+    local items=('Bootstrap this VM' 'Prerequisite check' 'Sync config to GitHub' 'Status' 'Clean up Docker') p choice
     for p in $(list_providers); do items+=("Provider: $p"); done
     items+=('Quit')
     choice="$(ui_menu 'Choose an action' "${items[@]}")" || break
@@ -60,6 +60,7 @@ tui_loop() {
       'Prerequisite check')     bash "$GEN/preflight.sh" ;;
       'Sync config to GitHub')  local r; r="$(ui_input 'GitHub remote URL (blank = existing origin)')"; bash "$GEN/sync-config.sh" ${r:+--remote "$r"} ;;
       'Status')                 gen_status ;;
+      'Clean up Docker')        bash "$GEN/clean-docker.sh" ;;
       'Provider: '*)            provider_menu_loop "${choice#Provider: }"; continue ;;
       'Quit'|'')                break ;;
     esac
@@ -79,6 +80,7 @@ General:
   bootstrap-vm                    packages, Docker, security baseline (any provider)
   preflight                       prerequisite check
   sync-config                     SOPS/age-encrypted config+secrets snapshot to GitHub
+  clean                           tear down Kutab's Docker resources [--volumes|--all|--data]
 
 Providers ($(list_providers | tr '\n' ' ')):
   kutab-deploy <provider> <action> [args]      e.g. kutab-deploy swarm deploy-tenant acme ...
@@ -97,6 +99,7 @@ case "$cmd" in
   bootstrap-vm)             exec bash "$GEN/bootstrap-vm.sh" "$@" ;;
   preflight)                exec bash "$GEN/preflight.sh" "$@" ;;
   sync-config)              exec bash "$GEN/sync-config.sh" "$@" ;;
+  clean|teardown|clean-docker) exec bash "$GEN/clean-docker.sh" "$@" ;;
   swarm|compose)            run_provider_script "$cmd" "$@" ;;
   # back-compat aliases → provider scripts
   bootstrap-swarm)          run_provider_script swarm bootstrap-cluster "$@" ;;

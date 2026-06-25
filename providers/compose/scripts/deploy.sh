@@ -175,37 +175,9 @@ FRONTEND_HOST_RULE=$(host_rule "$TENANT_DOMAIN" "$CUSTOM_DOMAIN")
 EOF
 chmod 600 "$DEPLOY_DIR/.env"
 
-# ── Traefik TLS strategy → traefik.env (regenerated every deploy; re-run to switch).
-# 'cloudflare' = origin self-signed cert + the client's Cloudflare in "Full" mode
-# (no token, scales to any number of clients). 'le'/'le-dns-cloudflare' = a real LE
-# cert at the origin. Routers just set tls=true; the resolver (when any) is the
-# websecure entrypoint default below, loaded by the traefik service via env_file.
-case "$TLS_MODE" in le|cloudflare|le-dns-cloudflare) ;; *) fail "Unknown --tls-mode '$TLS_MODE' (use le|cloudflare|le-dns-cloudflare)";; esac
-if [[ "$TLS_MODE" == le-dns-cloudflare ]]; then
-  [[ -n "$CF_DNS_TOKEN" || ! -f "$DEPLOY_DIR/.cf_dns_token" ]] || CF_DNS_TOKEN="$(cat "$DEPLOY_DIR/.cf_dns_token")"
-  [[ -n "$CF_DNS_TOKEN" ]] || fail "--tls-mode le-dns-cloudflare needs --cf-dns-token <token> for this zone (Zone:DNS:Edit + Zone:Read)."
-fi
-{
-  if [[ "$TLS_MODE" == cloudflare ]]; then
-    echo "# Cloudflare Full mode: origin serves Traefik's default self-signed cert."
-    echo "# Cloudflare presents the real public cert at its edge — no ACME, no token."
-  else
-    echo "TRAEFIK_ENTRYPOINTS_WEBSECURE_HTTP_TLS_CERTRESOLVER=le"
-    echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL=$ACME_EMAIL"
-    echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_STORAGE=/acme/acme.json"
-    if [[ "$TLS_MODE" == le-dns-cloudflare ]]; then
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_DNSCHALLENGE=true"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_DNSCHALLENGE_PROVIDER=cloudflare"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_DNSCHALLENGE_RESOLVERS=1.1.1.1:53,1.0.0.1:53"
-      echo "CF_DNS_API_TOKEN=$CF_DNS_TOKEN"
-    else
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_HTTPCHALLENGE=true"
-      echo "TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_HTTPCHALLENGE_ENTRYPOINT=web"
-    fi
-  fi
-} > "$DEPLOY_DIR/traefik.env"
-chmod 600 "$DEPLOY_DIR/traefik.env"
-[[ "$TLS_MODE" == le-dns-cloudflare && "$DRY_RUN" != true ]] && { ( umask 077; printf '%s' "$CF_DNS_TOKEN" > "$DEPLOY_DIR/.cf_dns_token" ); chmod 600 "$DEPLOY_DIR/.cf_dns_token"; }
+# Traefik TLS strategy → traefik.env (regenerated every deploy; or switch later
+# without a redeploy: `kutab-deploy compose set-tls <name> --tls-mode <mode>`).
+write_traefik_env "$DEPLOY_DIR" "$ACME_EMAIL" "$TLS_MODE" "$CF_DNS_TOKEN"
 log "Traefik TLS mode: $TLS_MODE"
 
 compose=(docker compose -p "kutab-$NAME" --env-file "$DEPLOY_DIR/.env" -f "$COMPOSE")
