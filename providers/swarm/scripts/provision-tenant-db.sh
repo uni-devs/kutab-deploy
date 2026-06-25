@@ -13,6 +13,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/common.sh" ]]; do KUTAB_ROOT="$(dirname "$KUTAB_ROOT")"; done
+# shellcheck source=../../../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"   # provider_state_root (local helpers below still win)
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
 
 SLUG="${1:-}"; shift || true
 ROTATE=false
@@ -35,7 +39,7 @@ password() { openssl rand -base64 36 | tr -d '/+=' | head -c 32; }
 [[ -n "$SLUG" ]] || fail "Usage: $0 <tenant-slug> [--rotate-password]"
 command -v docker >/dev/null || fail "docker is required"
 
-ROOT_PW_FILE="$PROVIDER_ROOT/secrets/infrastructure/shared_db_root_password"
+ROOT_PW_FILE="$DATA_ROOT/secrets/infrastructure/shared_db_root_password"
 [[ -f "$ROOT_PW_FILE" ]] || fail "Root password file not found ($ROOT_PW_FILE). Run deploy-shared-db.sh first."
 ROOT_PW="$(cat "$ROOT_PW_FILE")"
 
@@ -45,7 +49,7 @@ safe="$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g;
 DB_NAME="kutab_${safe}"
 DB_USER="$(printf 'kutab_%s' "$safe" | cut -c1-32)"   # MySQL usernames are capped at 32 chars
 
-CRED_DIR="$PROVIDER_ROOT/envs/tenants/$SLUG"
+CRED_DIR="$DATA_ROOT/envs/tenants/$SLUG"
 CRED_FILE="$CRED_DIR/db.env"
 mkdir -p "$CRED_DIR"
 

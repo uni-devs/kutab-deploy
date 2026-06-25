@@ -50,12 +50,10 @@ ok "Base packages installed"
 install_docker() {
   if have docker && docker compose version >/dev/null 2>&1; then ok "Docker already installed"; return; fi
   log "Installing Docker CE + compose plugin"
-  $SUDO install -m 0755 -d /etc/apt/keyrings
-  local id; id="$( (. /etc/os-release && echo "$ID") )"
-  curl -fsSL "https://download.docker.com/linux/${id}/gpg" | $SUDO gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  $SUDO chmod a+r /etc/apt/keyrings/docker.gpg
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${id} $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-    | $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null
+  local id codename; id="$( (. /etc/os-release && echo "$ID") )"; codename="$( (. /etc/os-release && echo "$VERSION_CODENAME") )"
+  add_apt_repo docker "https://download.docker.com/linux/${id}/gpg" \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${id} ${codename} stable" \
+    || fail "Docker repo setup failed"
   $SUDO apt-get update -qq
   $SUDO apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
   $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
@@ -69,8 +67,9 @@ install_docker() {
 install_gum() {
   have gum && { ok "gum already installed"; return; }
   log "Installing gum"
-  curl -fsSL https://repo.charm.sh/apt/gpg.key | $SUDO gpg --dearmor -o /etc/apt/keyrings/charm.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | $SUDO tee /etc/apt/sources.list.d/charm.list >/dev/null
+  add_apt_repo charm "https://repo.charm.sh/apt/gpg.key" \
+    "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" \
+    || { warn "gum repo setup failed — the console will fall back to whiptail/plain."; return; }
   $SUDO apt-get update -qq && $SUDO apt-get install -y -qq gum >/dev/null && ok "gum installed" \
     || warn "gum install failed — the console will fall back to whiptail/plain."
 }

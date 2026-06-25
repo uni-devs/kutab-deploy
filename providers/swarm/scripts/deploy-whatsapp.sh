@@ -9,6 +9,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/common.sh" ]]; do KUTAB_ROOT="$(dirname "$KUTAB_ROOT")"; done
+# shellcheck source=../../../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"   # node_state_* (local helpers below still win)
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
 
 WHATSAPP_POOL="${WHATSAPP_POOL:-shared}"
 WHATSAPP_IMAGE="${WHATSAPP_IMAGE:-avoylenko/wwebjs-api:latest}"
@@ -40,8 +44,8 @@ docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active \
 docker network inspect kutab-shared >/dev/null 2>&1 \
   || fail "The kutab-shared overlay network is missing. Run bootstrap-cluster.sh first."
 
-SECRET_DIR="$PROVIDER_ROOT/secrets/infrastructure"
-ENV_DIR="$PROVIDER_ROOT/envs/infrastructure"
+SECRET_DIR="$DATA_ROOT/secrets/infrastructure"
+ENV_DIR="$DATA_ROOT/envs/infrastructure"
 mkdir -p "$SECRET_DIR" "$ENV_DIR"
 API_KEY_FILE="$SECRET_DIR/wwebjs_api_key"
 TOKEN_FILE="$SECRET_DIR/wwebjs_webhook_token"
@@ -99,6 +103,7 @@ fi
 
 log "Deploying WhatsApp gateway (kutab-whatsapp) onto whatsapp_pool '$WHATSAPP_POOL' using image $WHATSAPP_IMAGE"
 docker stack deploy --with-registry-auth -c "$PROVIDER_ROOT/templates/whatsapp-stack.yml" kutab-whatsapp
+node_state_set WHATSAPP 1
 
 log "Waiting for the gateway to converge (1/1)..."
 for _ in $(seq 1 60); do

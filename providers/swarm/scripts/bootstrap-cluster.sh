@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/common.sh" ]]; do KUTAB_ROOT="$(dirname "$KUTAB_ROOT")"; done
+# shellcheck source=../../../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"   # node_state_* + helpers (local log/fail below still win)
 
 # bootstrap-cluster.sh [advertise-addr] [--advertise-addr X] [--role shared|client]
 #                      [--client-name <slug>] [--node <hostname|id>]
@@ -38,11 +41,14 @@ fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 command -v docker >/dev/null || fail "docker is required"
 
+# secrets + generated env files live OFF the code tree (data dir); only the
+# config templates below stay in the repo.
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
 mkdir -p \
-  "$PROVIDER_ROOT/envs/infrastructure" \
-  "$PROVIDER_ROOT/envs/tenants" \
-  "$PROVIDER_ROOT/secrets/infrastructure" \
-  "$PROVIDER_ROOT/secrets/tenants" \
+  "$DATA_ROOT/envs/infrastructure" \
+  "$DATA_ROOT/envs/tenants" \
+  "$DATA_ROOT/secrets/infrastructure" \
+  "$DATA_ROOT/secrets/tenants" \
   "$PROVIDER_ROOT/configs/traefik/dynamic" \
   "$PROVIDER_ROOT/configs/traefik/auth" \
   "$PROVIDER_ROOT/configs/prometheus" \
@@ -54,7 +60,7 @@ mkdir -p \
   "$PROVIDER_ROOT/configs/grafana/provisioning/dashboards" \
   "$PROVIDER_ROOT/configs/grafana/dashboards"
 
-chmod 700 "$PROVIDER_ROOT/envs" "$PROVIDER_ROOT/secrets" 2>/dev/null || true
+chmod 700 "$DATA_ROOT" "$DATA_ROOT/envs" "$DATA_ROOT/secrets" 2>/dev/null || true
 
 state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
 if [[ "$state" != "active" ]]; then
@@ -103,5 +109,11 @@ else
 fi
 
 docker swarm update --task-history-limit 2 >/dev/null || warn "Could not update task history limit"
+
+# record what this node is, so the console can reason about it
+node_state_set PROVIDER swarm
+node_state_set SWARM_ROLE "$(is_manager && echo manager || echo worker)"
+node_state_set NODE_KIND "$NODE_ROLE"
+[[ "$NODE_ROLE" == client ]] && node_state_set CLIENT_NAME "$CLIENT_NAME"
 
 log "Swarm bootstrap is ready"

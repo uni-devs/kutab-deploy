@@ -13,6 +13,8 @@ source "$KUTAB_ROOT/lib/common.sh"
 # shellcheck source=../../../lib/tui.sh
 source "$KUTAB_ROOT/lib/tui.sh"
 
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
+
 TARGET=""; ALL=false; SKIP_MIGRATE=false; DRY_RUN=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,7 +29,7 @@ done
 require_docker
 
 swarm_stacks() { swarm_active && docker stack ls --format '{{.Name}}' 2>/dev/null | grep '^kutab' || true; }
-single_projects() { ls -1 "$PROVIDER_ROOT/envs/single" 2>/dev/null || true; }
+single_projects() { ls -1 "$DATA_ROOT/envs/single" 2>/dev/null || true; }
 
 # update one Swarm stack: bump every service to its tag's current digest
 update_swarm_stack() {
@@ -41,7 +43,7 @@ update_swarm_stack() {
       || warn "Failed to update $svc"
   done
   # tenant stacks: run migrations through a one-off CLI container
-  local name="${stack#kutab-}" envf="$PROVIDER_ROOT/envs/tenants/${stack#kutab-}/backend.env"
+  local name="${stack#kutab-}" envf="$DATA_ROOT/envs/tenants/${stack#kutab-}/backend.env"
   if [[ "$SKIP_MIGRATE" != true && -f "$envf" && "$DRY_RUN" != true ]]; then
     local bimg; bimg="$(docker service inspect "${stack}_backend" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"; bimg="${bimg%@*}"
     if [[ -n "$bimg" ]]; then
@@ -54,7 +56,7 @@ update_swarm_stack() {
 }
 
 update_single() {
-  local name="$1" dir="$PROVIDER_ROOT/envs/single/$name"
+  local name="$1" dir="$DATA_ROOT/envs/single/$name"
   [[ -f "$dir/.env" ]] || fail "No single-box project at $dir"
   local compose=(docker compose -p "kutab-$name" --env-file "$dir/.env" -f "$PROVIDER_ROOT/templates/single-stack.compose.yml")
   if [[ "$DRY_RUN" == true ]]; then log "[dry-run] ${compose[*]} pull && up -d"; return; fi

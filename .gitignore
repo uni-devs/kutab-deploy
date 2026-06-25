@@ -1,0 +1,2 @@
+# node-local state (per node, never synced)
+.kutab-node.env

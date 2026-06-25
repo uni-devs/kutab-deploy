@@ -1,0 +1,59 @@
+version: "3.9"
+
+# Per-tenant DEDICATED MySQL. Layered onto tenant-stack.yml by deploy-tenant.sh
+# when NOT using --shared-db:
+#   docker stack deploy -c tenant-stack.yml -c tenant-db-dedicated.yml kutab-<tenant>
+# With --shared-db this file is omitted and the tenant points at DB_HOST=kutab-db.
+
+services:
+  mysql:
+    image: mysql:8.4.8
+    env_file:
+      - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/backend.env
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --mysql-native-password=ON
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    networks:
+      - tenant-internal
+    volumes:
+      - mysql-data:/var/lib/mysql
+    secrets:
+      - mysql_password
+      - mysql_root_password
+    deploy:
+      placement:
+        constraints:
+          - node.labels.kutab.db == true
+          - node.labels.kutab.db_pool == ${DB_POOL}
+      resources:
+        limits:
+          cpus: "${KUTAB_DB_CPU_LIMIT:-1.0}"
+          memory: ${KUTAB_DB_MEM_LIMIT:-1024M}
+        reservations:
+          cpus: "${KUTAB_DB_CPU_RES:-0.25}"
+          memory: ${KUTAB_DB_MEM_RES:-512M}
+      labels:
+        - "kutab.tenant=${TENANT_NAME}"
+        - "kutab.service=mysql"
+
+networks:
+  tenant-internal:
+    driver: overlay
+    attachable: true
+
+volumes:
+  mysql-data:
+
+secrets:
+  mysql_password:
+    external: true
+    name: ${TENANT_NAME}_mysql_password
+  mysql_root_password:
+    external: true
+    name: ${TENANT_NAME}_mysql_root_password

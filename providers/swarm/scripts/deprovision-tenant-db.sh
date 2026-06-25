@@ -8,6 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/common.sh" ]]; do KUTAB_ROOT="$(dirname "$KUTAB_ROOT")"; done
+# shellcheck source=../../../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"   # provider_state_root (local helpers below still win)
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
 
 SLUG="${1:-}"; shift || true
 CONFIRM=false
@@ -29,7 +33,7 @@ fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 [[ "$CONFIRM" == true ]] || fail "Refusing to drop data without --yes."
 command -v docker >/dev/null || fail "docker is required"
 
-ROOT_PW_FILE="$PROVIDER_ROOT/secrets/infrastructure/shared_db_root_password"
+ROOT_PW_FILE="$DATA_ROOT/secrets/infrastructure/shared_db_root_password"
 [[ -f "$ROOT_PW_FILE" ]] || fail "Root password file not found ($ROOT_PW_FILE)."
 ROOT_PW="$(cat "$ROOT_PW_FILE")"
 
@@ -51,5 +55,5 @@ printf '%s\n' "$SQL" | docker run -i --rm --network kutab-shared \
   mysql --connect-timeout=5 -h "$DB_HOST_ALIAS" -uroot \
   || fail "Could not reach the shared DB at '$DB_HOST_ALIAS'."
 
-rm -f "$PROVIDER_ROOT/envs/tenants/$SLUG/db.env"
-log "Done. Removed database, user, and envs/tenants/$SLUG/db.env"
+rm -f "$DATA_ROOT/envs/tenants/$SLUG/db.env"
+log "Done. Removed database, user, and the tenant db.env"

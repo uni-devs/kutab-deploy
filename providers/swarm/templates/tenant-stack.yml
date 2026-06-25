@@ -65,34 +65,11 @@ x-backend-base: &backend-base
     - tenant-internal
     - kutab-shared
 
+# NOTE: the per-tenant MySQL service lives in tenant-db-dedicated.yml and is layered
+# on only for DEDICATED databases (deploy-tenant.sh without --shared-db). With
+# --shared-db, the tenant uses the cluster's shared MySQL (DB_HOST=kutab-db) and no
+# DB service is deployed here.
 services:
-  mysql:
-    image: mysql:8.4.8
-    env_file:
-      - ${PROVIDER_ROOT}/envs/tenants/${TENANT_NAME}/backend.env
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --mysql-native-password=ON
-    environment:
-      MYSQL_DATABASE: ${DB_DATABASE}
-      MYSQL_USER: ${DB_USERNAME}
-      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
-      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
-    networks:
-      - tenant-internal
-    volumes:
-      - mysql-data:/var/lib/mysql
-    secrets:
-      - mysql_password
-      - mysql_root_password
-    deploy:
-      placement:
-        constraints:
-          - node.labels.kutab.db == true
-          - node.labels.kutab.db_pool == ${DB_POOL}
-      resources: *db-resources
-
   valkey:
     image: valkey/valkey:7.2.12-alpine
     env_file:
@@ -188,38 +165,26 @@ services:
         - "traefik.http.routers.${TENANT_NAME}-frontend.middlewares=security-headers@file"
         - "traefik.http.services.${TENANT_NAME}-frontend.loadbalancer.server.port=3000"
 
-  worker:
+  # Laravel Horizon runs the queue workers for ALL queues (default, notifications,
+  # …) and auto-balances/auto-scales worker PROCESSES inside the container by load.
+  # Scale further by raising HORIZON_REPLICAS — Horizon instances coordinate via Redis.
+  horizon:
     <<: *backend-base
     environment:
-      CONTAINER_MODE: worker
-      WORKER_COMMAND: php artisan queue:work --queue=default --sleep=3 --tries=3 --max-time=3600
+      CONTAINER_MODE: horizon
     volumes:
       - backend-storage:/var/www/html/storage/app/public
       - backend-logs:/var/www/html/storage/logs
     deploy:
       <<: *app-placement
-      replicas: ${WORKER_REPLICAS}
+      replicas: ${HORIZON_REPLICAS:-1}
       resources: *worker-resources
       labels:
         - "kutab.tenant=${TENANT_NAME}"
-        - "kutab.service=worker"
+        - "kutab.service=horizon"
 
-  worker-notifications:
-    <<: *backend-base
-    environment:
-      CONTAINER_MODE: worker
-      WORKER_COMMAND: php artisan queue:work --queue=notifications --sleep=3 --tries=3 --max-time=3600
-    volumes:
-      - backend-storage:/var/www/html/storage/app/public
-      - backend-logs:/var/www/html/storage/logs
-    deploy:
-      <<: *app-placement
-      replicas: ${NOTIFICATION_WORKER_REPLICAS}
-      resources: *worker-resources
-      labels:
-        - "kutab.tenant=${TENANT_NAME}"
-        - "kutab.service=worker-notifications"
-
+  # Scheduler runs cron — keep at EXACTLY 1 replica (never scale; tasks are also
+  # guarded with ->onOneServer() as a backstop).
   scheduler:
     <<: *backend-base
     environment:
@@ -252,6 +217,8 @@ services:
         - "traefik.http.routers.${TENANT_NAME}-ws.tls=true"
         - "traefik.http.routers.${TENANT_NAME}-ws.tls.certresolver=letsencrypt"
         - "traefik.http.services.${TENANT_NAME}-ws.loadbalancer.server.port=6001"
+        - "traefik.http.services.${TENANT_NAME}-ws.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.${TENANT_NAME}-ws.loadbalancer.sticky.cookie.name=kutab_ws"
 
 networks:
   tenant-internal:
@@ -261,15 +228,6 @@ networks:
     external: true
 
 volumes:
-  mysql-data:
   valkey-data:
   backend-storage:
   backend-logs:
-
-secrets:
-  mysql_password:
-    external: true
-    name: ${TENANT_NAME}_mysql_password
-  mysql_root_password:
-    external: true
-    name: ${TENANT_NAME}_mysql_root_password

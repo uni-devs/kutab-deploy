@@ -9,7 +9,8 @@ KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/c
 source "$KUTAB_ROOT/lib/common.sh"
 
 NAME="${1:?usage: whatsapp.sh <name>}"
-DIR="$PROVIDER_ROOT/envs/$NAME"
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
+DIR="$DATA_ROOT/envs/$NAME"
 [[ -f "$DIR/.env" ]] || fail "No compose deployment '$NAME' at $DIR"
 require_docker
 compose=(docker compose -p "kutab-$NAME" --env-file "$DIR/.env" -f "$PROVIDER_ROOT/templates/single-stack.compose.yml" --profile whatsapp)

@@ -14,12 +14,17 @@ source "$KUTAB_ROOT/lib/tui.sh"
 source "$KUTAB_ROOT/lib/providers.sh"
 
 cluster_banner() {
-  if swarm_active; then printf 'Swarm: active (%s) · %s' "$(is_manager && echo manager || echo worker)" "$(hostname)"
-  else printf 'Swarm: inactive · %s' "$(hostname)"; fi
+  local base kind client
+  if swarm_active; then base="Swarm: active ($(is_manager && echo manager || echo worker))"; else base="Swarm: inactive"; fi
+  kind="$(node_state_get NODE_KIND)"; client="$(node_state_get CLIENT_NAME)"
+  printf '%s · %s%s' "$base" "$(hostname)" "${kind:+ · ${kind}${client:+:$client}}"
 }
 
 gen_status() {
-  ui_title 'Status'
+  ui_title 'Node'
+  node_state_show
+  printf '\n'
+  ui_title 'Cluster'
   if swarm_active; then docker node ls 2>/dev/null; printf '\n'; docker stack ls 2>/dev/null; else ui_note 'Swarm inactive.'; fi
   printf '\n'; ui_note "Providers available: $(list_providers | tr '\n' ' ')"
 }

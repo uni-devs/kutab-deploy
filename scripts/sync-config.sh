@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Snapshot deployment config + secrets to a Git/GitHub remote, with secrets
-# encrypted via SOPS + age. Plaintext secrets/ + envs/ are git-ignored; only
-# their *.sops (encrypted) copies are committed alongside the plaintext config.
+# encrypted via SOPS + age. Plaintext secrets/envs live OFF the repo (the data
+# dir, default /var/lib/kutab); only their encrypted *.sops copies are committed,
+# under state/<provider>/. Use --restore to decrypt them back onto a new node.
 #
-#   sync-config.sh [--remote <git-url>] [--message <msg>] [--no-push] [--dry-run]
+#   sync-config.sh [--remote <git-url>] [--message <msg>] [--no-push]
+#                  [--restore] [--dry-run]
 #
 # The age PRIVATE key lives off-repo at ~/.config/sops/age/keys.txt — back it up
 # (a password manager). Without it the snapshot CANNOT be decrypted.
@@ -16,14 +18,15 @@ source "$KUTAB_ROOT/lib/common.sh"
 # shellcheck source=../lib/tui.sh
 source "$KUTAB_ROOT/lib/tui.sh"
 
-REMOTE=""; MESSAGE=""; DO_PUSH=true; DRY_RUN=false
+REMOTE=""; MESSAGE=""; DO_PUSH=true; DRY_RUN=false; RESTORE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --remote) REMOTE="$2"; shift 2 ;;
     --message) MESSAGE="$2"; shift 2 ;;
     --no-push) DO_PUSH=false; shift ;;
+    --restore) RESTORE=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) fail "Unknown option: $1" ;;
   esac
 done
@@ -43,47 +46,68 @@ fi
 RECIPIENT="$(age-keygen -y "$AGE_KEY_FILE" 2>/dev/null)"
 [[ "$RECIPIENT" == age1* ]] || fail "Could not derive the age public key from $AGE_KEY_FILE"
 ui_note "age recipient: $RECIPIENT"
+export SOPS_AGE_KEY_FILE="$AGE_KEY_FILE"   # needed for --restore (decrypt)
 
-# ── .sops.yaml (documents the recipient for every provider's secret/env trees) ──
+# Plaintext secrets/envs live OFF the code tree (data dir); the repo only ever
+# holds their encrypted *.sops copies under state/<provider>/{secrets,envs}/.
+DATA_DIR="$(kutab_data_dir)"
+STATE_DIR="$REPO_ROOT/state"
+
+# ── restore: decrypt state/*.sops back into the data dir (for a replacement node) ──
+if [[ "$RESTORE" == true ]]; then
+  [[ -d "$STATE_DIR" ]] || fail "No state/ to restore from (run a snapshot first, or git pull it)."
+  log "Restoring plaintext secrets/envs: $STATE_DIR → $DATA_DIR/providers"
+  while IFS= read -r -d '' s; do
+    rel="${s#"$STATE_DIR"/}"; rel="${rel%.sops}"          # <provider>/<secrets|envs>/<path>
+    out="$DATA_DIR/providers/$rel"
+    [[ "$DRY_RUN" == true ]] && { log "[dry-run] decrypt $s -> $out"; continue; }
+    mkdir -p "$(dirname "$out")"
+    sops --decrypt --input-type binary --output-type binary "$s" > "$out" && chmod 600 "$out" \
+      || warn "Failed to decrypt $s"
+  done < <(find "$STATE_DIR" -type f -name '*.sops' -print0)
+  ok "Restore complete. Plaintext is back under $DATA_DIR/providers."
+  exit 0
+fi
+
+# ── .sops.yaml (documents the recipient for the encrypted state tree) ──
 cat > "$KUTAB_ROOT/.sops.yaml" <<YAML
 creation_rules:
-  - path_regex: providers/.*/(secrets|envs)/.*
+  - path_regex: state/.*
     age: $RECIPIENT
 YAML
 
-# ── .gitignore (plaintext secrets/envs out; keep their .sops copies) ────────────
+# ── .gitignore (plaintext lives off-repo; commit only state/*.sops) ─────────────
 GI="$REPO_ROOT/.gitignore"
 if ! grep -q 'KUTAB-SYNC' "$GI" 2>/dev/null; then
   cat >> "$GI" <<'IGN'
 
-# ── KUTAB-SYNC: never commit plaintext secrets/envs; only their *.sops copies ──
-providers/*/secrets/**
-!providers/*/secrets/**/
-!providers/*/secrets/**/*.sops
-providers/*/envs/**
-!providers/*/envs/**/
-!providers/*/envs/**/*.sops
-**/.mysql_root
+# ── KUTAB-SYNC: plaintext secrets/envs live OFF-repo (the data dir). Commit only
+# the encrypted state/*.sops copies; ignore any stray plaintext under state/.
+state/**
+!state/**/
+!state/**/*.sops
 IGN
 fi
 
-# ── encrypt every plaintext secret/env file to <file>.sops ──────────────────────
-encrypt_tree() { # encrypt_tree <dir>
-  local dir="$1" f
-  [[ -d "$dir" ]] || return 0
+# ── encrypt every off-repo plaintext file into the repo's state/ as <file>.sops ──
+encrypt_tree() { # encrypt_tree <plaintext-root> <state-root>
+  local src="$1" dst="$2" f rel out
+  [[ -d "$src" ]] || return 0
   while IFS= read -r -d '' f; do
     [[ "$f" == *.sops ]] && continue
-    [[ "$(basename "$f")" == .mysql_root ]] && continue
-    if [[ "$DRY_RUN" == true ]]; then log "[dry-run] encrypt $f -> $f.sops"; continue; fi
-    sops --age "$RECIPIENT" --encrypt --input-type binary --output-type binary "$f" > "$f.sops" \
-      && chmod 600 "$f.sops" || warn "Failed to encrypt $f"
-  done < <(find "$dir" -type f -print0)
+    rel="${f#"$src"/}"; out="$dst/$rel.sops"
+    if [[ "$DRY_RUN" == true ]]; then log "[dry-run] encrypt $f -> $out"; continue; fi
+    mkdir -p "$(dirname "$out")"
+    sops --age "$RECIPIENT" --encrypt --input-type binary --output-type binary "$f" > "$out" \
+      && chmod 600 "$out" || warn "Failed to encrypt $f"
+  done < <(find "$src" -type f -print0)
 }
-log "Encrypting every provider's secrets + envs (SOPS/age)…"
-for p in "$KUTAB_ROOT"/providers/*/; do
+log "Encrypting every provider's secrets + envs from $DATA_DIR (SOPS/age)…"
+for p in "$DATA_DIR"/providers/*/; do
   [[ -d "$p" ]] || continue
-  encrypt_tree "${p}secrets"
-  encrypt_tree "${p}envs"
+  name="$(basename "$p")"
+  encrypt_tree "${p}secrets" "$STATE_DIR/$name/secrets"
+  encrypt_tree "${p}envs"    "$STATE_DIR/$name/envs"
 done
 
 # ── git: identity, remote, commit, push ─────────────────────────────────────────

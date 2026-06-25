@@ -82,10 +82,14 @@ provider_flow() {
       base="$(ui_input 'Platform base domain (tenant = <name>.<base>)')"
       custom="$(ui_input 'Custom domain (optional)')"
       pool="$(_sw_choose_pool)" || return
-      ui_confirm "Deploy tenant '$name' on pool '$pool'?" || return
+      local shared_db=()
+      if [[ "$pool" == shared ]] && ui_confirm 'Use the cluster shared MySQL? (No = a dedicated DB container for this tenant)'; then
+        shared_db=(--shared-db)
+      fi
+      ui_confirm "Deploy tenant '$name' on pool '$pool'${shared_db:+ (shared DB)}?" || return
       # shellcheck disable=SC2086
       bash "$S/deploy-tenant.sh" "$name" --platform-base-domain "$base" \
-        ${custom:+--custom-domain "$custom"} --app-pool "$pool" --db-pool "$pool" --cache-pool "$pool"
+        ${custom:+--custom-domain "$custom"} --app-pool "$pool" --db-pool "$pool" --cache-pool "$pool" "${shared_db[@]}"
       show_dns "$name.$base" "$custom" "$(public_ip)"
       if [[ "$pool" != shared ]] && ui_confirm "Enable the CPU autoscaler for $name on this client node?"; then
         bash "$S/autoscaler.sh" add "kutab-${name}_backend" --min 1 --max 4 --up 75 --down 20

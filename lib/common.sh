@@ -88,3 +88,62 @@ public_ip() {
   [[ -z "$ip" ]] && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   printf '%s' "$ip"
 }
+
+# ── data dir (per-node secrets, generated env files + node state) ───────────────
+# Lives OUTSIDE the code tree so live creds never sit next to the scripts and a
+# `git clean`/redeploy can't wipe them. Default /var/lib/kutab when writable
+# (root nodes), else ~/.local/share/kutab. Override with KUTAB_DATA_DIR.
+kutab_data_dir() {
+  if [[ -n "${KUTAB_DATA_DIR:-}" ]]; then printf '%s' "$KUTAB_DATA_DIR"; return; fi
+  if [[ "$(id -u)" -eq 0 || -w /var/lib ]]; then printf '/var/lib/kutab'; else printf '%s/.local/share/kutab' "$HOME"; fi
+}
+# secrets/env base for one provider, e.g. /var/lib/kutab/providers/swarm
+provider_state_root() { printf '%s/providers/%s' "$(kutab_data_dir)" "${1:?provider}"; }
+
+# ── node state (per-node, NOT synced) ──────────────────────────────────────────
+# A simple KEY=VALUE record of what this node is / holds, so the console can
+# reason about it. Lives in the data dir (off the code tree, git-ignored).
+node_state_file() { printf '%s/node.env' "$(kutab_data_dir)"; }
+
+node_state_set() { # node_state_set KEY VALUE
+  local f k="$1" v="${2:-}"; f="$(node_state_file)"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  touch "$f" 2>/dev/null || return 0
+  if grep -q "^${k}=" "$f" 2>/dev/null; then
+    sed -i "s|^${k}=.*|${k}=${v}|" "$f"
+  else
+    printf '%s=%s\n' "$k" "$v" >> "$f"
+  fi
+}
+
+node_state_get() { # node_state_get KEY
+  local f; f="$(node_state_file)"
+  [[ -f "$f" ]] && { grep -E "^$1=" "$f" | tail -1 | cut -d= -f2-; } || true
+}
+
+# append a value to a comma-list key (deduplicated)
+node_state_append() { # node_state_append KEY VALUE
+  local cur new; cur="$(node_state_get "$1")"
+  case ",$cur," in *",$2,"*) return 0 ;; esac
+  [[ -n "$cur" ]] && new="$cur,$2" || new="$2"
+  node_state_set "$1" "$new"
+}
+
+node_state_show() {
+  local f; f="$(node_state_file)"
+  [[ -s "$f" ]] && cat "$f" || printf '(no node state recorded yet)\n'
+}
+
+# ── apt repo helper (modern keyring; re-run safe; never the deprecated apt-key) ──
+# add_apt_repo <name> <key-url> <sources-line>
+add_apt_repo() {
+  local name="$1" key_url="$2" line="$3" SUDO=""
+  [[ "$(id -u)" -ne 0 ]] && SUDO=sudo
+  $SUDO install -m 0755 -d /etc/apt/keyrings
+  if curl -fsSL "$key_url" | $SUDO gpg --dearmor --yes -o "/etc/apt/keyrings/${name}.gpg"; then
+    $SUDO chmod a+r "/etc/apt/keyrings/${name}.gpg"
+    printf '%s\n' "$line" | $SUDO tee "/etc/apt/sources.list.d/${name}.list" >/dev/null
+  else
+    warn "Could not fetch the $name signing key from $key_url"; return 1
+  fi
+}

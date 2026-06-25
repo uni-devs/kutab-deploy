@@ -11,7 +11,8 @@ source "$KUTAB_ROOT/lib/common.sh"
 NAME="${1:?usage: update.sh <name> [--skip-migrate]}"; shift || true
 SKIP_MIGRATE=false; [[ "${1:-}" == "--skip-migrate" ]] && SKIP_MIGRATE=true
 
-DIR="$PROVIDER_ROOT/envs/$NAME"
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
+DIR="$DATA_ROOT/envs/$NAME"
 [[ -f "$DIR/.env" ]] || fail "No compose deployment '$NAME' at $DIR"
 require_docker
 compose=(docker compose -p "kutab-$NAME" --env-file "$DIR/.env" -f "$PROVIDER_ROOT/templates/single-stack.compose.yml")

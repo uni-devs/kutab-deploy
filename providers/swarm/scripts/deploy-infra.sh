@@ -3,6 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/common.sh" ]]; do KUTAB_ROOT="$(dirname "$KUTAB_ROOT")"; done
+# shellcheck source=../../../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"   # node_state_* (local helpers below still win)
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
 
 CLUSTER_DOMAIN="${1:-}"
 ACME_EMAIL="${2:-}"
@@ -39,7 +43,7 @@ docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active || fail "Swarm
 
 mkdir -p "$PROVIDER_ROOT/configs/traefik/auth"
 mkdir -p "$PROVIDER_ROOT/configs/prometheus/rules" "$PROVIDER_ROOT/configs/grafana/provisioning/dashboards" "$PROVIDER_ROOT/configs/grafana/dashboards"
-ACCESS_FILE="$PROVIDER_ROOT/envs/infrastructure/access.txt"
+ACCESS_FILE="$DATA_ROOT/envs/infrastructure/access.txt"; mkdir -p "$(dirname "$ACCESS_FILE")"
 
 ensure_secret() {
   local name="$1"
@@ -382,7 +386,7 @@ cat > "$PROVIDER_ROOT/configs/grafana/dashboards/kutab-tenant-operations.json" <
 }
 JSON
 
-cat > "$PROVIDER_ROOT/envs/infrastructure/infrastructure.env" <<EOF
+cat > "$DATA_ROOT/envs/infrastructure/infrastructure.env" <<EOF
 CLUSTER_DOMAIN=$CLUSTER_DOMAIN
 ACME_EMAIL=$ACME_EMAIL
 CONFIG_ROOT=$PROVIDER_ROOT/configs
@@ -414,5 +418,6 @@ if [[ "$DRY_RUN" == true ]]; then
 else
   docker stack deploy -c "$PROVIDER_ROOT/templates/infra-stack.yml" kutab-infra
   log "Infrastructure deploy submitted"
+  node_state_set INFRA 1
   log "Access credentials: $ACCESS_FILE"
 fi

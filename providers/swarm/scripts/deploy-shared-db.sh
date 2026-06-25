@@ -11,6 +11,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROVIDER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+KUTAB_ROOT="$SCRIPT_DIR"; while [[ "$KUTAB_ROOT" != / && ! -e "$KUTAB_ROOT/lib/common.sh" ]]; do KUTAB_ROOT="$(dirname "$KUTAB_ROOT")"; done
+# shellcheck source=../../../lib/common.sh
+source "$KUTAB_ROOT/lib/common.sh"   # provider_state_root (local helpers below still win)
+DATA_ROOT="$(provider_state_root "$(basename "$PROVIDER_ROOT")")"
 
 DB_POOL="${DB_POOL:-shared}"
 SHARED_DB_IMAGE="${SHARED_DB_IMAGE:-mysql:8.4.8}"
@@ -41,10 +45,10 @@ docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active \
 docker network inspect kutab-shared >/dev/null 2>&1 \
   || fail "The kutab-shared overlay network is missing. Run bootstrap-cluster.sh first."
 
-SECRET_DIR="$PROVIDER_ROOT/secrets/infrastructure"
+SECRET_DIR="$DATA_ROOT/secrets/infrastructure"
 ROOT_PW_FILE="$SECRET_DIR/shared_db_root_password"
 mkdir -p "$SECRET_DIR" "$PROVIDER_ROOT/configs/mysql"
-chmod 700 "$PROVIDER_ROOT/secrets" 2>/dev/null || true
+chmod 700 "$DATA_ROOT" "$DATA_ROOT/secrets" 2>/dev/null || true
 
 # ── root password secret ─────────────────────────────────────────────────────
 # Stored both as a Docker secret (consumed by the container) and as a 0600 file
