@@ -132,7 +132,10 @@ write_traefik_env() {
     fi
   } > "$dir/traefik.env"
   chmod 600 "$dir/traefik.env"
-  [[ "$mode" == le-dns-cloudflare ]] && { ( umask 077; printf '%s' "$token" > "$dir/.cf_dns_token" ); chmod 600 "$dir/.cf_dns_token"; }
+  if [[ "$mode" == le-dns-cloudflare ]]; then
+    ( umask 077; printf '%s' "$token" > "$dir/.cf_dns_token" ); chmod 600 "$dir/.cf_dns_token"
+  fi
+  return 0   # don't let the trailing test's exit status trip the caller's `set -e`
 }
 
 # ── node state (per-node, NOT synced) ──────────────────────────────────────────
